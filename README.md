@@ -10,6 +10,7 @@ frontend/                Vue 3 源码
 frontend/dist/           前端生产构建
 config/                  vLLM Manager 目标配置
 data/                    评测相册、身份图和 QA（本地数据，不纳入 Git）
+docs/                    项目介绍、面板使用方法和优化调试方法
 results/                 历史评测结果（本地数据，不纳入 Git）
 logs/                    服务日志（不纳入 Git）
 scripts/                 本地启动脚本
@@ -63,7 +64,7 @@ npm run build
 
 ## 数据来源与扩展边界
 
-两条可回迁到 Sentrix 生产后端的优化实现，以及 153 数据访问方式、A/B 指标和接入步骤，见 [记忆查询与图关系建立优化方案](docs/memory-query-and-image-graph-optimization.md)。
+当前项目结构、面板功能和测评操作方式见 [PhotoBench 测评项目介绍与系统使用说明](docs/project-introduction-and-evaluation-guide.md)；记忆查询架构、图关系建立的优化调试方法见 [代码优化调试方法](docs/memory-query-and-graph-debugging-method.md)。
 
 | 信息 | 当前来源 | 是否需要 Sentrix 新接口 |
 |---|---|---|
