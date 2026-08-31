@@ -254,3 +254,208 @@ find data -maxdepth 2 -type f
 | 检索命中但回答错误 | 逐题查看 candidate、preview、inspect、证据账本和回答引用 |
 | Judge 无结果 | Judge 服务、API 配置、并发限制和提示词版本 |
 | 时延异常 | 区分模型、工具、流水线和 Judge 时延，不用总墙钟替代分项数据 |
+
+## 8. 记忆查询架构与代码优化调试方法
+
+本节说明如何分析、修改、调试和验收记忆查询代码，不直接提供优化实现代码。适用于 153 上的 Sentrix 工程和本仓库的 PhotoBench 测评。
+
+### 8.1 当前记忆查询链路
+
+153 当前 `search_memories` 的主要逻辑如下：
+
+```mermaid
+flowchart TB
+    Q[用户问题] --> P[查询/语义槽位解析]
+    P --> F[时间/地点/人物/媒体硬条件]
+    P --> S[结构化召回]
+    P --> L[关键词/FTS召回]
+    P --> A[语义/ANN召回]
+    P --> E[事件成员召回]
+    S --> M[多路合并与排序]
+    L --> M
+    A --> M
+    E --> M
+    F --> M
+    M --> W[候选窗口/ResultSet]
+    W --> I[inspect/OCR/人物工具]
+    I --> C[证据账本]
+    C --> N[最终回答]
+```
+
+调试时逐层确认：
+
+1. 槽位解析是否丢掉时间、地点、人物或事件；
+2. 空 query 是否错误地走了语义召回；
+3. 结构化通道是否正确执行硬条件；
+4. 中文关键词分词和 FTS 索引是否正常；
+5. ANN 向量模型、版本和 scope 是否一致；
+6. 事件召回是否把“属于事件”误当成“与问题相关”；
+7. 合并排序是否让低相关候选挤掉 GT；
+8. 预览窗口是否因去重或多样性策略隐藏 GT；
+9. ResultSet、preview、inspect 是否来自同一次查询；
+10. 证据账本是否记录了回答实际使用的资产。
+
+### 8.2 记忆查询问题定位表
+
+| 问题 | 观察信号 | 定位顺序 |
+|---|---|---|
+| GT 完全未召回 | Recall@K 为 0 | scope、时间/地点过滤、槽位、各通道原始结果 |
+| 原始结果有 GT，预览没有 | retrieved IDs 有 GT，preview 无 GT | 候选窗口、断层截断、事件多样性和 preview 排序 |
+| 跨相册串结果 | candidate scope 与题目不同 | scope 传递、缓存 key、ResultSet 归属和数据库条件 |
+| 时间题命中错误年份 | time filter 缺失或边界不一致 | 问题时间、槽位 bounds、captured_at、最终过滤条件 |
+| 中文检索失效 | lexical 为空、仅 ANN 命中 | 规范化、分词、FTS 刷新和短词处理 |
+| 多路结果重复 | duplicate rate 上升 | asset_id 去重、证据合并、视频 keyframe 映射 |
+| 检索正确但回答错误 | GT 已在候选和 inspect 中 | 转入视觉、工具或回答综合层，不再调召回 |
+| 多轮引用串上下文 | 第二轮引用上一轮错误图片 | result_set_id、翻页规则、scope 和指代解析 |
+
+### 8.3 记忆查询 A/B 调试流程
+
+```mermaid
+flowchart LR
+    A[固定QA与检索GT] --> B[运行当前版本]
+    B --> C[保存逐题trace]
+    C --> D[建立修改分支/配置开关]
+    D --> E[shadow只计算不生效]
+    E --> F{候选和证据安全检查}
+    F -->|不通过| X[回滚并分析]
+    F -->|通过| G[小样本A/B]
+    G --> H[全量重复测试]
+    H --> I[人工复核边界样本]
+```
+
+建议一次只改一个变量：先增加 trace 和统计，再改单个召回通道，再改融合排序，最后才调整候选窗口或缓存。所有阶段都保留旧结果，不用新结果覆盖基线。
+
+### 8.4 记忆查询测试集和指标
+
+测试集至少覆盖：结构化事实、时间过滤、地点过滤、人物查询、视觉语义、OCR、多轮引用、空结果/拒答和视频 keyframe。
+
+| 指标 | 定义 |
+|---|---|
+| Recall@K | 命中的 GT 资产数 / GT 资产总数 |
+| Precision@K | 命中的 GT 资产数 / 返回候选数 |
+| MRR | 第一个 GT 候选排名倒数的平均值 |
+| nDCG@K | 按相关性等级评价排序质量 |
+| evidence coverage | 回答所需证据进入候选和证据账本的比例 |
+| duplicate rate | 同一资产、视频帧或证据重复出现的比例 |
+| contradiction rate | 硬条件过滤后仍存在冲突候选的比例 |
+| p50/p95 latency | 只统计检索，不混入模型和 Judge 时延 |
+
+正式 A/B 前建议达到：Recall 不下降，Precision 不下降超过 2 个百分点，evidence coverage ≥ 0.95，duplicate rate ≤ 0.01，检索 p95 不增加 20%。最终门槛应以当前 baseline 和业务要求为准。
+
+## 9. 图关系建立与代码优化调试方法
+
+本节同样只说明调试和验收方法，不直接提交关系图优化代码。
+
+### 9.1 当前关系建立链路
+
+```mermaid
+flowchart TB
+    A[原始图片/视频帧] --> B[人脸检测]
+    B --> C[人脸质量与bbox]
+    C --> D[人脸embedding]
+    D --> E[聚类/身份候选]
+    E --> F[确认人物与scope]
+    F --> G[共现/事件/人物瞬间]
+    G --> H[角色和关系假设]
+    H --> I[证据与置信度归并]
+    I --> J[关系hypothesis]
+    J --> K[冲突检查]
+    K --> L[查询投影或人工确认]
+```
+
+153 重点代码包括 `face_detector.py`、`face_embeddings.py`、`face_clustering.py`、`person_moments.py`、`person_graph.py`、`pipeline.py` 和 `db.py`。
+
+### 9.2 分层调试清单
+
+#### 人脸检测层
+
+- bbox 是否越界、过小、重复或落在错误视频帧；
+- 低清、遮挡、侧脸是否标记为低质量；
+- 单张图片的人脸数量是否和人工抽样一致；
+- 检测模型名称和版本是否记录。
+
+#### embedding 和聚类层
+
+- 向量模型、版本、维度和归一化方式是否一致；
+- 阈值改变后分别统计误合并和误拆分；
+- 低质量人脸是否形成 bridge；
+- 输入顺序改变后 cluster 是否稳定；
+- 是否出现异常 singleton 激增。
+
+#### 人物和事件层
+
+- cluster 是否正确映射到 person/entity；
+- person、face、asset、observation、event 是否属于同一个 scope；
+- interaction target 是否确实出现在同一张图片；
+- 视频 keyframe 是否错误继承 parent asset 的人物或事件。
+
+#### 关系边层
+
+- 对称关系是否只保留一条规范边；
+- 方向关系的 inverse predicate 是否正确；
+- self-loop、未知人物、跨 scope 关系是否被拒绝；
+- 每条关系能否追溯到 asset、observation、event 或 moment；
+- 重复证据是否被重复计数；
+- 家庭关系冲突是否进入人工复核，而不是直接成为 confirmed fact；
+- revision、supersedes 和 status 是否能够恢复历史状态。
+
+### 9.3 图关系问题定位表
+
+| 问题 | 典型表现 | 优先检查 |
+|---|---|---|
+| 两个人合成一个人 | cluster 过大、pairwise precision 下降 | bridge、阈值、pose bucket、embedding 版本 |
+| 同一人拆成多人 | pairwise recall 下降、singleton 上升 | 阈值、侧脸/光照、原型覆盖 |
+| 关系边重复 | A-B 与 B-A 同时存在 | 对称关系归一、唯一键、重试写入 |
+| 关系无证据 | 页面有关系但无法定位照片 | evidence ID、event/moment 绑定、scope |
+| 家庭关系过度推断 | 朋友/访客被推成亲属 | 关系门槛、unknown 保留、冲突检查 |
+| 新照片未更新 | 全量重跑才出现新边 | 增量触发、受影响 entity/event 计算 |
+| 冲突关系同时生效 | 同一对人物有相反关系 | conflict 标记和 confirmed 投影过滤 |
+
+### 9.4 图关系 A/B 调试流程
+
+1. 固定 face detector、embedding 模型和版本，只比较关系构建逻辑；
+2. 使用同一批图片和同一批 face instance，避免重新检测干扰结果；
+3. 导出旧版和新版 cluster、person mapping、relation edges 及证据 ID；
+4. 先比较身份 pairwise 指标，再比较关系边；
+5. 按关系类型统计，不用总 F1 掩盖某一类型退化；
+6. 对高置信、低置信、冲突、单证据和新增照片分别人工抽样；
+7. 先写入 suggested 投影，稳定后才进入 confirmed 查询投影；
+8. 保留旧版关系快照，出现误合并时按 revision 回滚。
+
+### 9.5 图关系指标
+
+- 人脸检测 Precision/Recall；
+- identity pairwise Precision/Recall/F1；
+- cluster singleton ratio、误合并率、误拆分率；
+- relation edge Precision/Recall/F1，并按关系类型拆分；
+- duplicate edge rate，目标为 0；
+- conflict rate；
+- evidence traceability，即 confirmed 关系可回溯到原始证据的比例，目标为 1；
+- 增量更新耗时与全量重建耗时；
+- confirmed 边误报率，优先级高于 suggested 召回率。
+
+## 10. 两部分工作的通用代码调试流程
+
+```mermaid
+flowchart LR
+    A[建立问题样本] --> B[记录当前基线]
+    B --> C[单变量修改]
+    C --> D[单元/契约测试]
+    D --> E[153 shadow运行]
+    E --> F[小批量A/B]
+    F --> G[全量回归]
+    G --> H[人工抽样]
+    H --> I[合并或回滚]
+```
+
+每次代码提交应附带：
+
+- 修改目标和不变条件；
+- 受影响的 QA 集合；
+- 修改前后指标；
+- 失败样本、run ID 和 trace；
+- 数据库或索引迁移说明；
+- 回滚方式；
+- 是否改变模型、提示词、并发或数据版本。
+
+实验结果保存时记录 commit、manifest、scope、模型、Judge 配置和数据版本。账号密码不写入脚本、日志、文档或 Git；原始媒体、数据库和 API Key 只保留在受控机器上。

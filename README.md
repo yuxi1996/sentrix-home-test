@@ -64,7 +64,7 @@ npm run build
 
 ## 数据来源与扩展边界
 
-当前项目结构、面板功能和测评操作方式见 [PhotoBench 测评项目介绍与系统使用说明](docs/project-introduction-and-evaluation-guide.md)；记忆查询架构、图关系建立的优化调试方法见 [代码优化调试方法](docs/memory-query-and-graph-debugging-method.md)。
+当前项目结构、面板功能、测评操作方式，以及记忆查询架构和图关系建立的优化调试方法，统一见 [PhotoBench 测评项目介绍与系统使用说明](docs/project-introduction-and-evaluation-guide.md)。
 
 | 信息 | 当前来源 | 是否需要 Sentrix 新接口 |
 |---|---|---|
