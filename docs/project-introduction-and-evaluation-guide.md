@@ -63,6 +63,29 @@ flowchart TB
     Q --> Q3[时延、token、Guard、Judge]
 ```
 
+### 3.1.1 记忆相册查看能力说明
+
+记忆查询和图关系优化的效果必须能回到具体照片、人物和证据上查看。目前面板提供以下查看路径：
+
+| 查看内容 | 当前入口 | 说明 |
+|---|---|---|
+| 相册是否已经构建 | 构建相册、复用相册 | 查看已有 memory space/scope 和处理状态 |
+| QA 对照照片 | QA 数据集审阅 | 查看题目的检索 GT、直接证据和视频证据 |
+| 实际检索结果 | 历史运行 → 逐题详情 | 查看 retrieved media、preview、predicted/evidence media |
+| 检索过程 | 历史运行 → 工具调用/检索轨迹 | 查看 query、候选、工具顺序、证据账本和耗时 |
+| 人物/关系效果 | 逐题人物引用、Sentrix 资产数据和关系查询 | 当前没有独立的关系图可视化页面，需要按 scope/API 核验 |
+
+需要特别说明：当前版本还没有独立的“记忆相册浏览器”页面。也就是说，可以查看 QA 证据和测评实际使用的照片，但不能像图库一样在一个页面中按 scope 浏览所有照片、人物、事件和关系。若要观察记忆查询或图关系优化效果，应使用下面的 scope 资产查看方式，并结合逐题结果比较。
+
+```mermaid
+flowchart LR
+    A[选择memory space/scope] --> B[读取scope资产]
+    B --> C[按asset查看照片/视频]
+    C --> D[查看observation/person/event]
+    D --> E[查看relation/evidence]
+    E --> F[与旧run逐题对比]
+```
+
 ### 3.1 运行配置
 
 用于填写或检查：
@@ -144,6 +167,61 @@ curl http://192.168.0.153:8771/api/health
 ```bash
 curl 'http://192.168.0.153:8771/api/qa-dataset?album_id=album3&qa_set=compact'
 ```
+
+### 4.2 如何查看记忆相册和实际入库资产
+
+先在面板的“复用相册”中加载已有 memory space，记录 `scope_id`。也可以通过接口获取 scope 列表：
+
+```bash
+curl 'http://192.168.0.153:8091/api/memory-spaces?limit=1000'
+```
+
+再查询该 scope 的资产：
+
+```bash
+curl 'http://192.168.0.153:8091/api/assets?scope_id=<SCOPE_ID>&limit=2000'
+```
+
+单个照片或视频资产可通过返回的 `asset.id` 查看：
+
+```text
+http://192.168.0.153:8091/api/assets/<ASSET_ID>/file
+```
+
+查看优化效果时，至少保存以下字段：
+
+- `asset_id`、`file_name`、`media_type`、`captured_at`；
+- observation 的描述、地点、人物和事件引用；
+- 人脸实例、person/entity、cluster 的映射；
+- 关系边的 subject、predicate、object、status、confidence 和 evidence；
+- 查询返回的 retrieved asset、preview asset、evidence asset；
+- 新旧 run 的 query、scope、候选排名和最终回答。
+
+### 4.3 如何通过面板看出优化前后差异
+
+使用同一相册和同一 QA 集合分别运行旧版本和修改版本，推荐使用“复用相册”模式，避免重复导入和流水线处理：
+
+```mermaid
+flowchart TB
+    A[同一scope/相册] --> B[旧版本reuse测评]
+    A --> C[修改版本reuse测评]
+    B --> D[旧run逐题详情]
+    C --> E[新run逐题详情]
+    D --> F[候选照片/人物/证据对比]
+    E --> F
+    F --> G[Recall、Precision、F1、时延和人工结论]
+```
+
+逐题对比顺序：
+
+1. 先对比 GT 是否进入 retrieved asset；
+2. 再对比 preview 是否展示正确照片；
+3. 再对比 inspect/OCR/人物工具是否使用了正确 asset handle；
+4. 再对比证据账本是否引用同一批照片；
+5. 图关系题再对比人物 cluster、关系边和 evidence ID；
+6. 最后对比最终回答、Judge、时延和 token。
+
+如果只看最终分数而不看照片和证据，无法判断优化究竟改善了召回、排序、人物识别还是回答生成。
 
 ### 步骤三：启动运行
 
