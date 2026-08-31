@@ -474,6 +474,131 @@ http://192.168.0.200:4174/#/timeline
 | Judge 无结果 | Judge 服务、API 配置、并发限制和提示词版本 |
 | 时延异常 | 区分模型、工具、流水线和 Judge 时延，不用总墙钟替代分项数据 |
 
+## 7.1 当前模型测试阶段的指标设置
+
+当前阶段首先是模型测试，因此必须把“模型能力”和“记忆系统能力”分开统计。截图中的 BFCL、BIRD、MMStar、MCPMark、EgoLife 是模型/Agent 的通用能力参考，不能直接证明记忆查询或图关系建立已经变好。
+
+### 7.1.1 三层指标
+
+```mermaid
+flowchart TB
+    A[模型能力指标]
+    B[记忆查询架构指标]
+    C[图关系建立指标]
+    A --> A1[BFCL/BIRD/MMStar/EgoLife]
+    A --> A2[工具调用/JSON/回答/时延]
+    B --> B1[检索Recall/Precision/排序]
+    B --> B2[证据覆盖/误召回/空结果]
+    B --> B3[查询时延/工具成功率]
+    C --> C1[人脸身份聚类]
+    C --> C2[关系边P/R/F1]
+    C --> C3[证据追溯/冲突/重复边]
+```
+
+| 层级 | 当前要回答的问题 | 主要指标 | 是否用于模型排名 |
+|---|---|---|---|
+| 模型能力 | 哪个模型的通用推理、视觉、工具调用更强 | BFCL、BIRD、MMStar、EgoLife、JSON、TTFT、token/s | 是 |
+| 记忆查询 | 同一个模型下，查询架构是否找到正确照片和证据 | Recall@K、Precision@K、MRR、nDCG、证据覆盖、误召回 | 否，作为系统分项；模型固定后比较架构 |
+| 图关系建立 | 同一个模型和同一批人脸下，身份和关系是否正确 | pairwise F1、关系边 P/R/F1、冲突率、证据追溯 | 否，作为系统分项；模型固定后比较算法 |
+
+报告中建议显示“模型总表 + 记忆查询分表 + 图关系分表”，不要把三层指标压成一个分数后只给出总排名。
+
+### 7.1.2 记忆查询架构指标
+
+统一使用两类候选窗口：`K=18` 表示完整检索候选，`K=6` 表示面板或模型实际可见的预览窗口。至少同时报告 Recall@18 和 Recall@6。
+
+| 指标 | 计算方式 | 当前用途 |
+|---|---|---|
+| Recall@18 | 进入完整候选集的 GT 资产数 / GT 资产总数 | 判断架构有没有召回正确照片 |
+| Recall@6 | 进入模型可见预览的 GT 资产数 / GT 资产总数 | 判断排序和预览是否把正确照片展示出来 |
+| Precision@18 | 候选中 GT 资产数 / 候选总数 | 判断误召回和候选噪声 |
+| MRR | 第一个 GT 资产排名倒数的均值 | 判断正确照片是否排在前面 |
+| nDCG@18 | 按直接证据、事件相关、弱相关分级计算排序 | 判断多证据排序质量 |
+| Evidence coverage | 回答需要的照片/人物/事件证据被候选和账本覆盖的比例 | 判断能否支撑最终回答 |
+| No-result accuracy | 没有证据的问题是否正确返回无结果/无法确认 | 判断是否减少编造 |
+| Duplicate rate | 重复 asset、视频帧或 evidence 的比例 | 判断多路召回合并质量 |
+| Hard-filter violation | 时间、地点、scope 等硬条件被违反的比例 | 必须接近 0 |
+| 检索 p50/p95 | 只统计 query 到候选集完成，不含 Judge | 判断架构代价 |
+
+153 已核对的参考基线为 Retrieval Precision/Recall/F1 `0.710 / 0.880 / 0.786`。在当前模型测试阶段，候选模型至少不能让这三个检索指标相对基线下降超过 2 个百分点；架构优化阶段再以固定模型比较提升量。
+
+建议的记忆查询验收门槛：
+
+- Recall@18 不下降；目标是在相同模型下提升 5%；
+- Recall@6 不低于 Recall@18 的 80%，避免正确照片被预览排序隐藏；
+- Precision@18 不下降超过 2 个百分点；
+- Evidence coverage ≥ 0.95；
+- Hard-filter violation = 0；
+- Duplicate rate ≤ 0.01；
+- 检索 p95 不超过旧版本的 120%；
+- 空结果题不得出现“找到照片”等无依据交付断言。
+
+### 7.1.3 图关系建立指标
+
+图关系指标必须使用人工标注或已确认关系作为 GT，不能用模型自己生成的关系作为正确答案。
+
+| 指标 | 计算方式 | 说明 |
+|---|---|---|
+| Identity pairwise Precision/Recall/F1 | 人物两两“同一人/不同人”判断与 GT 对比 | 评价人脸聚类是否误合并或误拆分 |
+| Cluster singleton ratio | 只有一个样本的人物簇 / 人物簇总数 | 监控过度拆分，不单独作为质量结论 |
+| Relation edge Precision/Recall/F1 | `(subject, predicate, object)` 与 GT 边集合对比 | 必须按朋友、亲属、共现等类型拆分 |
+| Confirmed precision | 被确认关系中真正正确的比例 | confirmed 误报优先级最高 |
+| Suggested recall | 候选关系中 GT 关系被提出的比例 | 衡量候选层召回 |
+| Evidence traceability | 可回溯到 asset/observation/event/moment 的关系数 / 关系总数 | confirmed 关系目标为 1.00 |
+| Duplicate edge rate | 同一规范化关系的重复边 / 关系边总数 | 目标为 0 |
+| Conflict rate | 被冲突检查标记的关系边 / 关系边总数 | 冲突不能静默进入 confirmed |
+| Cross-scope/self-loop rate | 跨相册或人物与自身关系的比例 | 目标为 0 |
+| Incremental update latency | 新增照片后的增量更新时间 | 与全量重建单独比较 |
+
+建议的图关系验收方式：
+
+- confirmed 关系优先保证 Precision ≥ 0.90，再逐步提高 Recall；
+- suggested 关系先报告 Recall，不把 suggested 当作事实；
+- Evidence traceability = 1.00；
+- Duplicate edge rate、Cross-scope rate、Self-loop rate 均为 0；
+- 所有冲突边必须可查询、可人工复核，不能只从结果中删除；
+- 如果此前没有人工 GT，第一轮只建立 baseline，不直接声称“提升了多少”。
+
+### 7.1.4 模型测试和架构测试的变量控制
+
+| 测试目的 | 固定条件 | 只改变的变量 | 结论 |
+|---|---|---|---|
+| 模型测试 | 153 最新算法代码、前端、QA、scope、检索参数、关系参数、Judge | 模型名称/量化/端点 | 哪个模型能力更强 |
+| 记忆查询架构测试 | 模型、scope、QA、Judge、并发、图片和人脸结果 | 检索通道、排序、过滤、缓存 | 架构是否改善检索 |
+| 图关系建立测试 | 模型、人脸检测结果、embedding、图片和 scope | 聚类、关系聚合、冲突处理 | 图关系算法是否改善 |
+
+模型测试时，截图里的 `BFCL V4 Memory 任务完成率`可以作为记忆 Agent 的高层参考；但它不等同于 Recall@18。`BFCL` 更接近工具调用，`MMStar/EgoLife` 更接近多模态理解，`BIRD/MCPMark` 不是本项目记忆相册检索和人物关系的主指标。
+
+截图中的模型测试参考值如下，录入报告时应保留原始 benchmark 名称、模型版本和运行配置：
+
+| Benchmark/指标 | Qwen2.5-Omni-7B | Qwen2.5-Omni-3B | gemma4:e2b | Qwen3-VL-4B-Thinking | MiniCPM-V-4.6 |
+|---|---:|---:|---:|---:|---:|
+| BFCL 函数调用完全正确率 | 48.74% | 40.54% | 43.82% | 61.42% | 26.27% |
+| BFCL 函数名匹配率 | 92.48% | 79.41% | 89.92% | 93.36% | 64.69% |
+| BFCL JSON 解析率 | 99.36% | 99.60% | 98.16% | 100.00% | 92.56% |
+| BIRD SQL 执行匹配率 | 21.80% | 14.00% | 14.60% | 28.80% | 2.00% |
+| BIRD JSON 解析率 | 99.40% | 99.20% | 78.40% | 99.20% | 49.20% |
+| MMStar 回答正确率 | 57.80% | 50.00% | 32.40% | 58.20% | 51.80% |
+| MMStar JSON 解析率 | 100.00% | 99.00% | 72.80% | 96.80% | 94.60% |
+| BFCL V4 Memory 任务完成率 | 5.38% | 6.45% | 10.75% | 23.23% | 8.82% |
+| MCPMark Filesystem | 0/30 | 0/30 | 0/30 | 1/30 | 0/30 |
+| MCPMark Postgres | 0/21 | 0/21 | 0/21 | 0/21 | 0/21 |
+| EgoLife 官方 caption-回答正确率 | 34.52% | 32.14% | 33.33% | 40.48% | 33.33% |
+
+该表只作为模型能力横向参考。模型名称、量化方式、提示词、工具契约、QA 集合、Judge 版本或硬件发生变化时，必须在结果中单独记录，不能把不同配置下的百分比直接排名。
+
+### 7.1.5 当前推荐的报告格式
+
+每个模型输出三行结果：
+
+```text
+模型能力：BFCL/BIRD/MMStar/EgoLife、JSON、TTFT、token/s
+记忆查询：Recall@18、Recall@6、Precision@18、MRR、Evidence coverage、p95
+图关系建立：Identity pairwise F1、Relation edge F1、Confirmed precision、冲突率、证据追溯率
+```
+
+若必须形成一个系统分数，也只能作为辅助展示，建议保留原始指标并注明权重。例如记忆系统分数可由 Recall@18、Precision@18、回答核心正确率、Evidence coverage 和时延组成；图关系系统分数可由身份 pairwise F1、关系边 F1、confirmed precision、证据追溯率和一致性组成。任何单一分数都不能替代逐项指标。
+
 ## 8. 记忆查询架构与代码优化调试方法
 
 本节说明如何分析、修改、调试和验收记忆查询代码，不直接提供优化实现代码。适用于 153 上的 Sentrix 工程和本仓库的 PhotoBench 测评。
