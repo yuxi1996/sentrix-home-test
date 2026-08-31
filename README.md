@@ -63,6 +63,8 @@ npm run build
 
 ## 数据来源与扩展边界
 
+两条可回迁到 Sentrix 生产后端的优化实现，以及 153 数据访问方式、A/B 指标和接入步骤，见 [记忆查询与图关系建立优化方案](docs/memory-query-and-image-graph-optimization.md)。
+
 | 信息 | 当前来源 | 是否需要 Sentrix 新接口 |
 |---|---|---|
 | 主 Agent 每轮 TTFT、总时延、输入/输出 token、token/s、上下文预算 | `/api/assistant/turn` 的 `model_call_metrics` | 否 |
