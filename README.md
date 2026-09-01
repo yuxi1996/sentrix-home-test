@@ -71,6 +71,8 @@ npm run build
 
 当前项目结构、面板功能、测评操作方式，以及记忆查询架构和图关系建立的优化调试方法，统一见 [PhotoBench 测评项目介绍与系统使用说明](docs/project-introduction-and-evaluation-guide.md)。
 
+Word 版（含当前项目分工、本周工作方向、测试参数和交付物）：[PhotoBench 项目介绍与测评系统使用说明（Word）](docs/PhotoBench_Project_Introduction_and_Evaluation_Guide_Updated.docx)
+
 | 信息 | 当前来源 | 是否需要 Sentrix 新接口 |
 |---|---|---|
 | 主 Agent 每轮 TTFT、总时延、输入/输出 token、token/s、上下文预算 | `/api/assistant/turn` 的 `model_call_metrics` | 否 |
